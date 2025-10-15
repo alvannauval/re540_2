@@ -1,0 +1,28 @@
+<launch>
+
+
+    <node pkg="tf2_ros" type="static_transform_publisher" name="map_to_odom_broadcaster" args="0 0 0 0 0 0 map odom" />
+
+    <node name="map" pkg="map_server" type="map_server" args="$(find main_pkg)/map/map.yaml"/>
+
+
+    <!-- Launch the world -->
+    <include file="$(find nexus_4wd_mecanum_gazebo)/launch/nexus_4wd_mecanum_world.launch">
+        <!-- Remap -->
+        
+        <!-- World -->
+        <arg name="world_name" default="$(find nexus_4wd_mecanum_gazebo)/worlds/obstacles_static.world" />
+        <!-- <arg name="world_name" value="$(find nexus_4wd_mecanum_gazebo)/worlds/obstacles_dynamic.world" /> -->
+
+        <!-- Robot -->
+        <arg name="robot_description_launch" value="$(find nexus_4wd_mecanum_description)/launch/nexus_4wd_mecanum_description.launch" />
+        <!-- <arg name="robot_description_launch" value="$(find main_pkg)/launch/custom_robot.launch" /> -->
+
+    </include>
+            
+    <include file="$(find local_costmap_generator)/launch/run.launch"/> 
+
+
+    <node name="rviz" pkg="rviz" type="rviz" args="-d $(find main_pkg)/rviz/re540.rviz" required="true" />
+
+</launch>

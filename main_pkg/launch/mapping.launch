@@ -1,0 +1,3 @@
+<launch>
+    <node pkg="main_pkg" type="mapper_node" name="mapper_node" />
+</launch>

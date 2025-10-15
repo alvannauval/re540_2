@@ -1,0 +1,74 @@
+digraph G {
+node [shape=box];
+"base_footprint" [label="base_footprint"];
+"base_link" [label="base_link"];
+"camera_bottom_screw_frame" [label="camera_bottom_screw_frame"];
+"camera_link" [label="camera_link"];
+"camera_depth_frame" [label="camera_depth_frame"];
+"camera_color_frame" [label="camera_color_frame"];
+"camera_color_optical_frame" [label="camera_color_optical_frame"];
+"camera_depth_optical_frame" [label="camera_depth_optical_frame"];
+"camera_left_ir_frame" [label="camera_left_ir_frame"];
+"camera_left_ir_optical_frame" [label="camera_left_ir_optical_frame"];
+"camera_right_ir_frame" [label="camera_right_ir_frame"];
+"camera_right_ir_optical_frame" [label="camera_right_ir_optical_frame"];
+"front_sensor" [label="front_sensor"];
+"left_sensor" [label="left_sensor"];
+"lower_left_wheel_shaft" [label="lower_left_wheel_shaft"];
+"lower_left_wheel" [label="lower_left_wheel"];
+"lower_right_wheel_shaft" [label="lower_right_wheel_shaft"];
+"lower_right_wheel" [label="lower_right_wheel"];
+"rear_sensor" [label="rear_sensor"];
+"right_sensor" [label="right_sensor"];
+"upper_left_wheel_shaft" [label="upper_left_wheel_shaft"];
+"upper_left_wheel" [label="upper_left_wheel"];
+"upper_right_wheel_shaft" [label="upper_right_wheel_shaft"];
+"upper_right_wheel" [label="upper_right_wheel"];
+node [shape=ellipse, color=blue, fontcolor=blue];
+"base_footprint" -> "base_link_joint" [label="xyz: 0 0 0.05 \nrpy: 0 -0 0"]
+"base_link_joint" -> "base_link"
+"base_link" -> "camera_joint" [label="xyz: 0.15 0 0.2 \nrpy: 0 -0 0"]
+"camera_joint" -> "camera_bottom_screw_frame"
+"camera_bottom_screw_frame" -> "camera_link_joint" [label="xyz: 0 0.0175 0.0125 \nrpy: 0 -0 0"]
+"camera_link_joint" -> "camera_link"
+"camera_link" -> "camera_depth_joint" [label="xyz: 0 0 0 \nrpy: 0 -0 0"]
+"camera_depth_joint" -> "camera_depth_frame"
+"camera_depth_frame" -> "camera_color_joint" [label="xyz: 0 0.015 0 \nrpy: 0 -0 0"]
+"camera_color_joint" -> "camera_color_frame"
+"camera_color_frame" -> "camera_color_optical_joint" [label="xyz: 0 0 0 \nrpy: -1.5708 -0 -1.5708"]
+"camera_color_optical_joint" -> "camera_color_optical_frame"
+"camera_depth_frame" -> "camera_depth_optical_joint" [label="xyz: 0 0 0 \nrpy: -1.5708 -0 -1.5708"]
+"camera_depth_optical_joint" -> "camera_depth_optical_frame"
+"camera_depth_frame" -> "camera_left_ir_joint" [label="xyz: 0 0 0 \nrpy: 0 -0 0"]
+"camera_left_ir_joint" -> "camera_left_ir_frame"
+"camera_left_ir_frame" -> "camera_left_ir_optical_joint" [label="xyz: 0 0 0 \nrpy: -1.5708 -0 -1.5708"]
+"camera_left_ir_optical_joint" -> "camera_left_ir_optical_frame"
+"camera_depth_frame" -> "camera_right_ir_joint" [label="xyz: 0 -0.05 0 \nrpy: 0 -0 0"]
+"camera_right_ir_joint" -> "camera_right_ir_frame"
+"camera_right_ir_frame" -> "camera_right_ir_optical_joint" [label="xyz: 0 0 0 \nrpy: -1.5708 -0 -1.5708"]
+"camera_right_ir_optical_joint" -> "camera_right_ir_optical_frame"
+"base_link" -> "front_sensor_joint" [label="xyz: 0.205 0 0.01 \nrpy: 0 -0 0"]
+"front_sensor_joint" -> "front_sensor"
+"base_link" -> "left_sensor_joint" [label="xyz: 0 0.108 0.01 \nrpy: 0 -0 1.5708"]
+"left_sensor_joint" -> "left_sensor"
+"base_link" -> "lower_left_wheel_shaft_joint" [label="xyz: -0.15 0.108 0 \nrpy: 0 -0 0"]
+"lower_left_wheel_shaft_joint" -> "lower_left_wheel_shaft"
+"lower_left_wheel_shaft" -> "lower_left_wheel_joint" [label="xyz: 0 0.042 0 \nrpy: 0 -0 0"]
+"lower_left_wheel_joint" -> "lower_left_wheel"
+"base_link" -> "lower_right_wheel_shaft_joint" [label="xyz: -0.15 -0.108 0 \nrpy: 3.14159 -0 0"]
+"lower_right_wheel_shaft_joint" -> "lower_right_wheel_shaft"
+"lower_right_wheel_shaft" -> "lower_right_wheel_joint" [label="xyz: 0 0.042 0 \nrpy: 0 -0 0"]
+"lower_right_wheel_joint" -> "lower_right_wheel"
+"base_link" -> "rear_sensor_joint" [label="xyz: -0.201 0 0.01 \nrpy: 0 -0 3.14159"]
+"rear_sensor_joint" -> "rear_sensor"
+"base_link" -> "right_sensor_joint" [label="xyz: 0 -0.108 0.01 \nrpy: 0 0 -1.5708"]
+"right_sensor_joint" -> "right_sensor"
+"base_link" -> "upper_left_wheel_shaft_joint" [label="xyz: 0.15 0.108 0 \nrpy: 0 -0 0"]
+"upper_left_wheel_shaft_joint" -> "upper_left_wheel_shaft"
+"upper_left_wheel_shaft" -> "upper_left_wheel_joint" [label="xyz: 0 0.042 0 \nrpy: 0 -0 0"]
+"upper_left_wheel_joint" -> "upper_left_wheel"
+"base_link" -> "upper_right_wheel_shaft_joint" [label="xyz: 0.15 -0.108 0 \nrpy: 3.14159 -0 0"]
+"upper_right_wheel_shaft_joint" -> "upper_right_wheel_shaft"
+"upper_right_wheel_shaft" -> "upper_right_wheel_joint" [label="xyz: 0 0.042 0 \nrpy: 0 -0 0"]
+"upper_right_wheel_joint" -> "upper_right_wheel"
+}

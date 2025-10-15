@@ -1,0 +1,83 @@
+<launch>
+  <!-- ARGUMENTS -->
+  <arg name="scan_topic" default="/scan" />
+  <arg name="odom_frame" default="odom" />
+  <arg name="base_frame" default="base_footprint" />
+  <arg name="map_frame" default="map" />
+  <!-- We set this to false by default, as the depthimage_to_laserscan node does not use PCL filters. -->
+  <arg name="use_pcl_filter" default="false" /> 
+  
+  
+  <!-- ============================================= -->
+  <!-- 1. POINT CLOUD PRE-PROCESSING (VOXEL GRID FILTER) -->
+  <!-- REMOVED: Voxel filter only works on PointCloud2, not Image. -->
+  <!-- We keep the args for structure, but set use_pcl_filter=false by default. -->
+  <!-- ============================================= -->
+  
+  <group if="$(arg use_pcl_filter)">
+    <node pkg="nodelet" type="nodelet" name="voxel_grid_manager" args="manager" output="screen" />
+    <node pkg="nodelet" type="nodelet" name="voxel_grid_filter" 
+          args="load pcl/VoxelGrid voxel_grid_manager" output="screen">
+      
+      <!-- Input topic from RealSense -->
+      <remap from="~input" to="/camera/depth/points" /> 
+      <!-- Filtered output topic -->
+      <remap from="~output" to="/camera/depth/points/filtered" />
+      
+      <!-- Voxel size (resolution of the filter) -->
+      <param name="leaf_size" type="double" value="0.05" /> 
+      
+      <!-- This group will not run unless you explicitly set use_pcl_filter:=true -->
+    </node>
+  </group>
+
+
+  <!-- ============================================= -->
+  <!-- 2. CONVERT DEPTH IMAGE TO LASER SCAN -->
+  <!-- Using the efficient depthimage_to_laserscan node -->
+  <!-- ============================================= -->
+
+  <node pkg="depthimage_to_laserscan" type="depthimage_to_laserscan" name="depthimage_to_laserscan_node" output="screen">
+    
+    <!-- Input Topics: Standard RealSense depth image and camera info -->
+    <remap from="image" to="/camera/depth/image_raw" /> 
+    <remap from="camera_info" to="/camera/depth/camera_info" /> 
+    
+    <!-- Output Topic (Consumed by GMapping) -->
+    <remap from="scan" to="$(arg scan_topic)" /> 
+
+    <!-- === PARAMETERS: Defines the 2D slice from the 3D cloud === -->
+    <!-- Range set to match previous settings -->
+    <param name="range_min" value="0.4" /> 
+    <param name="range_max" value="8.0" />  
+    
+    <!-- Use a single center row (2D slice) -->
+    <param name="scan_height" value="1" /> 
+    
+    <!-- Output frame must be the sensor frame -->
+    <param name="output_frame_id" value="camera_depth_frame" /> 
+  </node>
+
+
+  <!-- ============================================= -->
+  <!-- 3. G-MAPPING (SLAM NODE) -->
+  <!-- Carries over aggressive tuning -->
+  <!-- ============================================= -->
+  <node pkg="gmapping" type="slam_gmapping" name="slam_gmapping_node" output="screen">
+    <param name="base_frame" value="$(arg base_frame)"/>
+    <param name="odom_frame" value="$(arg odom_frame)"/>
+    <param name="map_frame" value="$(arg map_frame)"/>
+    <remap from="scan" to="$(arg scan_topic)"/>
+    <!-- <param name="map_update_interval" value="0.5"/> -->
+    <param name="linearUpdate" value="0.2"/>
+    <param name="angularUpdate" value="0.1"/>
+    <param name="delta" value="0.05"/>
+    <param name="particles" value="150"/>
+    <param name="minimum_score" value="25"/>
+    <param name="srr" value="0.01"/>
+    <param name="stt" value="1.0"/>
+    <param name="srt" value="0.5"/>
+    <param name="str" value="0.5"/>
+  </node>
+
+</launch>
