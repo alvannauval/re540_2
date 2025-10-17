@@ -178,35 +178,98 @@ void MotionPlanner::PublishCommand(std::vector<Node> motionMinCost)
 
 void MotionPlanner::Plan()
 {
-  // Compute current LOS target pose
-  if (this->bGetEgoOdom && this->bGetGoal) {
-    Node goalNode;
-    goalNode.x = this->goal_x;
-    goalNode.y = this->goal_y;
-    goalNode.yaw = this->goal_yaw;
-    localNode = GlobalToLocalCoordinate(goalNode, this->egoOdom);
-    // - compute truncated local node pose within local map
-    Node tmpLocalNode;
-    memcpy(&tmpLocalNode, &localNode, sizeof(struct Node));
-    tmpLocalNode.x = std::max(this->mapMinX, std::min(tmpLocalNode.x, this->mapMaxX));
-    tmpLocalNode.y = std::max(this->mapMinY, std::min(tmpLocalNode.y, this->mapMaxY));
-    truncLocalNode = tmpLocalNode;
+    // Compute current LOS target pose
+    if (this->bGetEgoOdom && this->bGetGoal) {
+        
+        Node goalNode;
+        geometry_msgs::PoseStamped targetPose; // Variable to hold the chosen target (waypoint or final goal)
+        bool isFollowingGlobalPath = false;
+        
+        // =========================================================================
+        // 1. SELECT TARGET POSE (Global Path Waypoint or Final Goal)
+        // =========================================================================
+        
+        // Check if a global path is available AND has points AND is not at the end
+        if (this->bGetGlobalPath && 
+            this->globalPath.poses.size() > 0 && 
+            this->currentWaypointIndex < this->globalPath.poses.size()) 
+        {
+            // Use the current waypoint from the global path as the target
+            targetPose = this->globalPath.poses[this->currentWaypointIndex];
+            isFollowingGlobalPath = true;
+        } 
+        else 
+        {
+            // Fallback: Use the ultimate /move_base_simple/goal
+            targetPose = this->goalPose;
+        }
 
-    // for debug
-    geometry_msgs::PoseStamped localPose = GlobalToLocalCoordinate(this->goalPose, this->egoOdom);
-    localPose.header.frame_id = "base_link";
-    pubTruncTarget.publish(localPose);
+        // 2. CONVERT TARGET TO INTERNAL NODE STRUCT
+        // Convert the chosen ROS PoseStamped message into the internal Node struct
+        goalNode.x = targetPose.pose.position.x;
+        goalNode.y = targetPose.pose.position.y;
+        
+        // Convert orientation from the target pose to RPY (yaw) for goalNode.yaw
+        tf2::Quaternion q_target;
+        double target_roll, target_pitch, target_yaw;
+        tf2::convert(targetPose.pose.orientation, q_target);
+        tf2::Matrix3x3 m_target(q_target);
+        m_target.getRPY(target_roll, target_pitch, target_yaw);
+        goalNode.yaw = target_yaw;
+        
+        // 3. TRANSFORM AND TRUNCATE
+        // Transform the chosen waypoint/goal from the global frame to the robot's local frame
+        localNode = GlobalToLocalCoordinate(goalNode, this->egoOdom);
+        
+        // - compute truncated local node pose within local map
+        Node tmpLocalNode;
+        memcpy(&tmpLocalNode, &localNode, sizeof(struct Node));
+        
+        // Truncate the local target to ensure it is within the map's boundaries
+        tmpLocalNode.x = std::max(this->mapMinX, std::min(tmpLocalNode.x, this->mapMaxX));
+        tmpLocalNode.y = std::max(this->mapMinY, std::min(tmpLocalNode.y, this->mapMaxY));
+        truncLocalNode = tmpLocalNode;
 
-    this->bGetLocalNode = true;
-  }
-  // Motion generation
-  motionCandidates = GenerateMotionPrimitives(this->localMap);
-  
-  // Select motion
-  std::vector<Node> motionMinCost = SelectMotion(motionCandidates);
+        // for debug (publish the truncated target)
+        geometry_msgs::PoseStamped debugPose = GlobalToLocalCoordinate(targetPose, this->egoOdom);
+        debugPose.header.frame_id = "base_link";
+        pubTruncTarget.publish(debugPose);
 
-  // Publish data
-  PublishData(motionMinCost, motionCandidates);
+        this->bGetLocalNode = true;
+        
+        // =========================================================================
+        // 4. WAYPOINT ADVANCEMENT CHECK (ONLY if following the Global Path)
+        // =========================================================================
+        if (isFollowingGlobalPath)
+        {
+            // Calculate distance to the current target waypoint (localNode is already in the robot's frame)
+            // The waypoint is at (0, 0) relative to the robot's frame.
+            double distToWaypoint = std::sqrt(this->localNode.x*this->localNode.x + this->localNode.y*this->localNode.y);
+
+            // If the robot is close enough to the current target waypoint, advance to the next one.
+            double WAYPOINT_REACHED_THRES = 0.5; // Threshold: 0.5 meters
+
+            if (distToWaypoint < WAYPOINT_REACHED_THRES)
+            {
+                // Increment the waypoint index
+                this->currentWaypointIndex++; 
+                
+                ROS_INFO("Reached Waypoint %d. Advancing to Waypoint %d of %lu.", 
+                         this->currentWaypointIndex - 1, 
+                         this->currentWaypointIndex, 
+                         this->globalPath.poses.size());
+            }
+        }
+    }
+    
+    // Motion generation
+    motionCandidates = GenerateMotionPrimitives(this->localMap);
+    
+    // Select motion
+    std::vector<Node> motionMinCost = SelectMotion(motionCandidates);
+
+    // Publish data
+    PublishData(motionMinCost, motionCandidates);
 }
 
 std::vector<std::vector<Node>> MotionPlanner::GenerateMotionPrimitives(nav_msgs::OccupancyGrid localMap)
@@ -603,6 +666,7 @@ void MotionPlanner::CallbackGlobalPath(const nav_msgs::Path& msg)
     this->globalPath = msg;
     this->bGetGoal = true;
     this->bGetGlobalPath = true;
+    this->currentWaypointIndex = 0;
     
     // You would typically reset your waypoint tracker here:
     // this->currentWaypointIndex = 0; 

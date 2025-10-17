@@ -156,7 +156,7 @@ class MotionPlanner
     double MAX_DELTA = 30.0 * (M_PI / 180.0); // [rad] maximum angle for control space sampling
     double MAX_PROGRESS = 5.0; // [m] max progress of motion
 
-    double ARRIVAL_THRES = 0.5; // [m] distance threshold for arrival
+    double ARRIVAL_THRES = 1; // [m] distance threshold for arrival
 
     // - cost weights
     double W_COST_DIRECTION      =  0.5; // -- offline cost
@@ -210,11 +210,15 @@ class MotionPlanner
     double ego_y = 0.0;
     double ego_yaw = 0.0;
 
+    int currentWaypointIndex = 0;
+
     // Signal checker
     bool bGetMap = false;
     bool bGetGoal = false;
     bool bGetLocalNode = false;
     bool bGetEgoOdom = false;
+    bool bGlobalPath = false;
+    bool bGetGlobalPath = false;
 
 };
 
