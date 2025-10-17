@@ -118,13 +118,11 @@ void MotionPlanner::PublishMotionPrimitives(std::vector<std::vector<Node>> motio
 
 void MotionPlanner::PublishCommand(std::vector<Node> motionMinCost)
 {
-
     geometry_msgs::Twist command;
     
+    // Safety check (unchanged)
     if (motionMinCost.empty()) {
-        command.linear.x = 0.0;
-        command.linear.y = 0.0;
-        command.angular.z = 0.0;
+        command.linear.x = 0.0; command.linear.y = 0.0; command.angular.z = 0.0;
         pubCommand.publish(command);
         return; 
     }
@@ -135,25 +133,31 @@ void MotionPlanner::PublishCommand(std::vector<Node> motionMinCost)
     double dist_to_target = std::sqrt(target_x_body*target_x_body + target_y_body*target_y_body);
 
     command.linear.x = 0.0;
-    command.linear.y = 0.0;
+    command.linear.y = 0.0; // CRITICAL: Explicitly set linear.y = 0 for non-holonomic
     command.angular.z = 0.0;
 
     if (dist_to_target > 1e-4) {
-        double Kp_Speed = 1.0; 
-        double Kp_Angular = 0.1; 
+        double Kp_Speed = 0.5; 
+        double Kp_Angular = 1;
         
         double proportional_speed = Kp_Speed * dist_to_target;
+        
+        // Angular Control: Based on the direction to the target point
         double desired_yaw_to_pos = std::atan2(target_y_body, target_x_body);
         double yaw_error = desired_yaw_to_pos;
 
         double actual_speed_magnitude = std::min(proportional_speed, this->MOTION_VEL); 
 
+        // 1. Translational Command (Forward/Backward only)
+        // Command is the magnitude projected onto the X-axis direction.
         command.linear.x = actual_speed_magnitude * (target_x_body / dist_to_target);
-        command.linear.y = actual_speed_magnitude * (target_y_body / dist_to_target);
+        // command.linear.y REMAINS 0.0 (as set above)
+        
+        // 2. Angular Command
         command.angular.z = Kp_Angular * yaw_error;
         
+        // Clamping (using MOTION_VEL for linear speeds)
         command.linear.x = std::max(-this->MOTION_VEL, std::min(command.linear.x, this->MOTION_VEL));
-        command.linear.y = std::max(-this->MOTION_VEL, std::min(command.linear.y, this->MOTION_VEL));
         command.angular.z = std::max(-1.0, std::min(command.angular.z, 1.0));
     }
 
@@ -162,12 +166,28 @@ void MotionPlanner::PublishCommand(std::vector<Node> motionMinCost)
     if (bGetGoal && bGetLocalNode) {
       double distToGoal = sqrt(this->localNode.x*this->localNode.x + this->localNode.y*this->localNode.y);
 
-      if (distToGoal < this->ARRIVAL_THRES) {
-        command.angular.z = 0.0;
-        command.linear.x = 0.0;
+      // Deceleration Zone (2*ARRIVAL_THRES to ARRIVAL_THRES)
+      if (distToGoal < 2*this->ARRIVAL_THRES && distToGoal >= this->ARRIVAL_THRES) {
+          double scale = pow(distToGoal / (2*this->ARRIVAL_THRES), 3.0);
+          command.linear.x = command.linear.x * scale;
+          // Note: command.linear.y is 0.0 and does not need scaling
       }
-      else if (distToGoal < 2*this->ARRIVAL_THRES) {
-        command.linear.x = command.linear.x * pow(distToGoal / 2*this->ARRIVAL_THRES, 3.0);
+
+      // Final Alignment Zone (distToGoal < ARRIVAL_THRES)
+      if (distToGoal < this->ARRIVAL_THRES) {
+          // Hard stop translational motion
+          command.linear.x = 0.0;
+          
+          // FIX: Angular Alignment to final goal orientation
+          // double final_yaw_error = normalizePiToPi(this->localNode.yaw);
+          // double Kp_Final_Yaw = 2.0; 
+          
+          // command.angular.z = Kp_Final_Yaw * final_yaw_error;
+          
+          // // Final angular stop check
+          // if (std::abs(final_yaw_error) < 0.05) { 
+          //     command.angular.z = 0.0;
+          // }
       }
     }
 
@@ -247,7 +267,7 @@ void MotionPlanner::Plan()
             double distToWaypoint = std::sqrt(this->localNode.x*this->localNode.x + this->localNode.y*this->localNode.y);
 
             // If the robot is close enough to the current target waypoint, advance to the next one.
-            double WAYPOINT_REACHED_THRES = 0.5; // Threshold: 0.5 meters
+            double WAYPOINT_REACHED_THRES = 1; // Threshold: 0.5 meters
 
             if (distToWaypoint < WAYPOINT_REACHED_THRES)
             {
@@ -339,17 +359,24 @@ std::vector<Node> MotionPlanner::RolloutMotion(Node startNode,
 
   // Loop for rollout
   while (progress < maxProgress) {
-    double dt = this->TIME_RESOL;
-    double dx = this->MOTION_VEL * cos(currMotionNode.yaw) * dt;
-    double dy = this->MOTION_VEL * sin(currMotionNode.yaw) * dt;
-    double d_omega = currMotionNode.delta;
 
-    // x_t+1   := x_t + x_dot * dt
-    // y_t+1   := y_t + y_dot * dt
-    // yaw_t+1 := yaw_t + yaw_dot * dt
+    double dt = this->TIME_RESOL;
+    double v = this->MOTION_VEL;
+    
+    // --- FIX: NON-HOLONOMIC (BICYCLE MODEL) KINEMATICS ---
+    
+    // Translation: Only forward motion, coupled to yaw
+    double dx = v * cos(currMotionNode.yaw) * dt; 
+    double dy = v * sin(currMotionNode.yaw) * dt;
+    
+    // Rotation: Angle of turn (d_omega) is coupled to forward speed (v) and steering angle (delta)
+    // Note: You must ensure WHEELBASE is defined (it is in your .hpp).
+    double dyaw = v / this->WHEELBASE * tan(currMotionNode.delta) * dt; 
+
+    // Position update
     currMotionNode.x += dx;
     currMotionNode.y += dy;
-    currMotionNode.yaw += d_omega * dt;
+    currMotionNode.yaw += dyaw; // Yaw is updated based on steering angle
 
     // ROS_INFO("Current Motion Node: Progress = %.2f, x=%.2f, y=%.2f, yaw=%.2f, delta=%.2f", progress, currMotionNode.x, currMotionNode.y, currMotionNode.yaw, currMotionNode.delta);
     
@@ -374,22 +401,28 @@ std::vector<Node> MotionPlanner::RolloutMotion(Node startNode,
     // - local to map coordinate transform
     Node collisionPointNode(currMotionNode.x, currMotionNode.y, 0, currMotionNode.yaw, currMotionNode.delta, 0, 0, 0, -1, false);
     Node collisionPointNodeMap = LocalToPlannerCordinate(collisionPointNode);
-    // ROS_INFO("MASUK 50");
+    
+    // ... (collision checking) ...
     if (CheckCollision(collisionPointNodeMap, localMap)) {
-      // ROS_INFO("MASUK 100")/;
-      // - do some process when collision occurs.
-      // - you can save collision information & calculate collision cost here.
-      // - you can break and return current motion primitive or keep generate rollout.
-
-      // Check if the primitive has any valid nodes saved before the collision point
-      if (!motionPrimitive.empty()) {
-          // ROS_INFO("MASUK 200");
-          // 1. Set the collision flag on the last *valid* node
-          motionPrimitive.back().collision = true;
-          
-          // 2. Assign a massive collision cost 
-          motionPrimitive.back().cost_colli = 999999; 
-      }
+        
+        // Check if the primitive has any valid nodes saved before the collision point
+        if (!motionPrimitive.empty()) {
+            
+            // 1. Calculate the distance traveled *before* collision (in steps)
+            double steps_traveled = motionPrimitive.size();
+            
+            // 2. Calculate the raw penalty
+            double raw_calculated_cost = MAX_COLLISION_PENALTY - (COST_REDUCTION_PER_STEP * steps_traveled);
+            
+            // 3. CLAMP THE COST: Use std::max to ensure the cost is never negative
+            double final_collision_cost = std::max(0.0, raw_calculated_cost);
+            
+            // Set the collision flag on the last *valid* node
+            motionPrimitive.back().collision = true;
+            
+            // Assign the final, non-negative collision cost
+            motionPrimitive.back().cost_colli = final_collision_cost; 
+        }
 
         return motionPrimitive;
     }
@@ -456,18 +489,19 @@ std::vector<Node> MotionPlanner::SelectMotion(std::vector<std::vector<Node>> mot
       double cost_total = 
           (this->W_COST_TRAVERSABILITY * cost_collision) +  // Prioritize safety (highest weight)
           (this->W_COST_DIRECTION * cost_goal_dist) +      // Drive toward goal
-          (this->W_COST_CONTROL * cost_control) +                           // Keep turns smooth (unit weight)
-          (this->W_COST_LENGTH_PENALTY * cost_length_penalty * 0);       // Penalize incomplete paths (medium weight)
+          (this->W_COST_LENGTH_PENALTY * cost_length_penalty);       // Penalize incomplete paths (medium weight)
 
 
           // Store the final cost in the last node for visualization (optional but useful)
       motionPrimitive.back().cost_total = cost_total;
 
-      ROS_INFO("Candidate Node no %d: target_x=%.2f, target_y=%.2f, delta=%.2f, cost_control=%.2f, cost_colli=%.2f, cost_goal_dist=%.2f, cost_length_penalty=%.2f, cost_total=%.2f", 
+      ROS_INFO("Candidate Node no %d:, waypoint idx: %d, cost_control=%.2f, cost_colli=%.2f, cost_goal_dist=%.2f, cost_length_penalty=%.2f", 
                motionPrimitive.front().idx,
-               endNode.x, endNode.y, startNode.delta, 
-               cost_control, cost_collision, cost_goal_dist, cost_length_penalty,
-               cost_total);
+               this->currentWaypointIndex,
+               cost_control, cost_collision, cost_goal_dist, cost_length_penalty);
+
+      ROS_INFO("Weighted Costs:  cost_w_colli=%.2f, cost_w_dist=%.2f, cost_w_length_penalty=%.2f, cost_total=%.2f",  
+               this->W_COST_TRAVERSABILITY * cost_collision, this->W_COST_DIRECTION * cost_goal_dist, this->W_COST_LENGTH_PENALTY * cost_length_penalty, cost_total);
 
       //! 3. Compare & Find minimum cost & minimum cost motion
       if (cost_total < minCost) {
