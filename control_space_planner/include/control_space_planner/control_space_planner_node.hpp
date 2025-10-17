@@ -118,6 +118,7 @@ class MotionPlanner
     void PublishCommand(std::vector<Node> motionMinCost);
     // Algorithms
     void Plan();
+    void CallbackGlobalPath(const nav_msgs::Path& msg);
     std::vector<std::vector<Node>> GenerateMotionPrimitives(nav_msgs::OccupancyGrid localMap);
     std::vector<Node> RolloutMotion(Node startNode, double maxProgress, nav_msgs::OccupancyGrid localMap);
     std::vector<Node> SelectMotion(std::vector<std::vector<Node>> motionPrimitives);
@@ -128,7 +129,7 @@ class MotionPlanner
 
 
     // Utils
-    Node LocalToPlannerCorrdinate(Node nodeLocal);
+    Node LocalToPlannerCordinate(Node nodeLocal);
     void PublishData(std::vector<Node> motionMinCost, std::vector<std::vector<Node>> motionPrimitives);
     
     // TODO: define necessary parameters below
@@ -151,19 +152,22 @@ class MotionPlanner
     double DIST_RESOL = 0.1; // [m] distance resolution for control space sampling
     double TIME_RESOL = 0.05; // [sec] time resolution between each motion (for rollout)
     double MOTION_VEL = DIST_RESOL / TIME_RESOL; // [m/s] velocity between each motion (for rollout)
-    double DELTA_RESOL = 0.2 * (M_PI / 180.0); // [rad] angle resolution for control space sampling
+    double DELTA_RESOL = 3 * (M_PI / 180.0); // [rad] angle resolution for control space sampling
     double MAX_DELTA = 30.0 * (M_PI / 180.0); // [rad] maximum angle for control space sampling
     double MAX_PROGRESS = 5.0; // [m] max progress of motion
 
-    double ARRIVAL_THRES = 1.0; // [m] distance threshold for arrival
+    double ARRIVAL_THRES = 0.5; // [m] distance threshold for arrival
 
     // - cost weights
-    double W_COST_DIRECTION      =  1.0; // -- offline cost
+    double W_COST_DIRECTION      =  0.5; // -- offline cost
     double W_COST_TRAVERSABILITY = 10.0; // -- online cost
+
+    double W_COST_CONTROL        =  0.0; 
+    double W_COST_LENGTH_PENALTY =  5.0;
     
     // - collision checking
-    double INFLATION_SIZE = 0.8 / mapResol; // [grid] inflation size [m] / grid_res [m/grid]
-    double LOOKAHEAD_DIST = 0.7; // [m] lookahead distance for collision cheking
+    double INFLATION_SIZE = 0.8 / mapResol; // [grid] inflation size [m] / grid_res [m/grid] default 0.8
+    double LOOKAHEAD_DIST = 0.7; // [m] lookahead distance for collision cheking default = 0.7
 
     // Motion primitives
     std::vector<std::vector<Node>> motionCandidates;
@@ -173,6 +177,7 @@ class MotionPlanner
     ros::Subscriber subOccupancyGrid;
     ros::Subscriber subEgoOdom;
     ros::Subscriber subGoalPoint;
+    ros::Subscriber subGlobalPath;
     
     
     // Output
@@ -187,6 +192,7 @@ class MotionPlanner
     // I/O Data
     nav_msgs::OccupancyGrid localMap;
     nav_msgs::Odometry egoOdom;
+    nav_msgs::Path globalPath;
 
     geometry_msgs::PoseStamped goalPose; // target goal point 
     Node localNode; // LOS target goal point 

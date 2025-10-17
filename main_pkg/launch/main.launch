@@ -22,7 +22,8 @@
             
     <include file="$(find local_costmap_generator)/launch/run.launch"/> 
 
+    <!-- <node name="rviz" pkg="rviz" type="rviz" args="-d $(find main_pkg)/rviz/re540.rviz" required="true" /> -->
+    <node name="rviz" pkg="rviz" type="rviz" args="-d $(find control_space_planner)/launch/config.rviz" required="true" />
 
-    <node name="rviz" pkg="rviz" type="rviz" args="-d $(find main_pkg)/rviz/re540.rviz" required="true" />
 
 </launch>

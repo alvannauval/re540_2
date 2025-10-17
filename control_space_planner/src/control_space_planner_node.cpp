@@ -7,10 +7,11 @@ MotionPlanner::MotionPlanner(ros::NodeHandle& nh) : nh_(nh)
   subOccupancyGrid = nh.subscribe("/map/local_map/obstacle",1, &MotionPlanner::CallbackOccupancyGrid, this);
   subEgoOdom = nh.subscribe("/odom",1, &MotionPlanner::CallbackEgoOdom, this);
   subGoalPoint = nh.subscribe("/move_base_simple/goal",1, &MotionPlanner::CallbackGoalPoint, this);
+  subGlobalPath = nh.subscribe("/path/global_path", 1, &MotionPlanner::CallbackGlobalPath, this);
   // Publisher
   pubSelectedMotion = nh_.advertise<sensor_msgs::PointCloud2>("/points/selected_motion", 1, true);
   pubMotionPrimitives = nh_.advertise<sensor_msgs::PointCloud2>("/points/motion_primitives", 1, true);
-  pubCommand = nh_.advertise<geometry_msgs::Twist>("/cmmd_vel", 1, true);
+  pubCommand = nh_.advertise<geometry_msgs::Twist>("/cmd_vel", 1, true);
   pubTruncTarget = nh_.advertise<geometry_msgs::PoseStamped>("/car/trunc_target", 1, true);
   
 };
@@ -118,30 +119,59 @@ void MotionPlanner::PublishMotionPrimitives(std::vector<std::vector<Node>> motio
 void MotionPlanner::PublishCommand(std::vector<Node> motionMinCost)
 {
 
-  geometry_msgs::Twist command;
-  // low-level control
-  double steering_angle = motionMinCost.back().delta;
-  double yaw = motionMinCost.back().yaw;
-  double speed_norm = 0.1 * this->MOTION_VEL * motionMinCost.size() / (this->MAX_PROGRESS / this->DIST_RESOL);
-  
-  command.angular.z = speed_norm * tan(steering_angle) / this->WHEELBASE * 0.5;
-  command.linear.x  = speed_norm * cos(yaw);
-  command.linear.y  = speed_norm * sin(yaw);
-
-  // arrival rule
-  if (bGetGoal && bGetLocalNode) {
-    double distToGoal = sqrt(this->localNode.x*this->localNode.x + this->localNode.y*this->localNode.y);
-
-    if (distToGoal < this->ARRIVAL_THRES) {
-      command.angular.z = 0.0;
-      command.linear.x = 0.0;
+    geometry_msgs::Twist command;
+    
+    if (motionMinCost.empty()) {
+        command.linear.x = 0.0;
+        command.linear.y = 0.0;
+        command.angular.z = 0.0;
+        pubCommand.publish(command);
+        return; 
     }
-    else if (distToGoal < 2*this->ARRIVAL_THRES) {
-      command.linear.x = command.linear.x * pow(distToGoal / 2*this->ARRIVAL_THRES, 3.0);
-    }
-  }
+    const Node& targetNode = motionMinCost.back(); 
+    
+    double target_x_body = targetNode.x;
+    double target_y_body = targetNode.y;
+    double dist_to_target = std::sqrt(target_x_body*target_x_body + target_y_body*target_y_body);
 
-  pubCommand.publish(command);
+    command.linear.x = 0.0;
+    command.linear.y = 0.0;
+    command.angular.z = 0.0;
+
+    if (dist_to_target > 1e-4) {
+        double Kp_Speed = 1.0; 
+        double Kp_Angular = 0.1; 
+        
+        double proportional_speed = Kp_Speed * dist_to_target;
+        double desired_yaw_to_pos = std::atan2(target_y_body, target_x_body);
+        double yaw_error = desired_yaw_to_pos;
+
+        double actual_speed_magnitude = std::min(proportional_speed, this->MOTION_VEL); 
+
+        command.linear.x = actual_speed_magnitude * (target_x_body / dist_to_target);
+        command.linear.y = actual_speed_magnitude * (target_y_body / dist_to_target);
+        command.angular.z = Kp_Angular * yaw_error;
+        
+        command.linear.x = std::max(-this->MOTION_VEL, std::min(command.linear.x, this->MOTION_VEL));
+        command.linear.y = std::max(-this->MOTION_VEL, std::min(command.linear.y, this->MOTION_VEL));
+        command.angular.z = std::max(-1.0, std::min(command.angular.z, 1.0));
+    }
+
+
+    // arrival rule
+    if (bGetGoal && bGetLocalNode) {
+      double distToGoal = sqrt(this->localNode.x*this->localNode.x + this->localNode.y*this->localNode.y);
+
+      if (distToGoal < this->ARRIVAL_THRES) {
+        command.angular.z = 0.0;
+        command.linear.x = 0.0;
+      }
+      else if (distToGoal < 2*this->ARRIVAL_THRES) {
+        command.linear.x = command.linear.x * pow(distToGoal / 2*this->ARRIVAL_THRES, 3.0);
+      }
+    }
+
+    pubCommand.publish(command);
 }
 
 /* ----- Algorithm Functions ----- */
@@ -169,7 +199,6 @@ void MotionPlanner::Plan()
 
     this->bGetLocalNode = true;
   }
-
   // Motion generation
   motionCandidates = GenerateMotionPrimitives(this->localMap);
   
@@ -186,6 +215,7 @@ std::vector<std::vector<Node>> MotionPlanner::GenerateMotionPrimitives(nav_msgs:
     TODO: Generate motion primitives
     - you can change the below process if you need.
     - you can calculate cost of each motion if you need.
+    - TODO: future needs: reverse motion
   */
 
 
@@ -219,7 +249,7 @@ std::vector<Node> MotionPlanner::RolloutMotion(Node startNode,
                                               nav_msgs::OccupancyGrid localMap)
 {
   /*
-    TODO: rollout to generate a motion primitive based on the current steering angle
+    Rollout to generate a motion primitive based on the current steering angle
     - calculate cost terms here if you need
     - check collision / sensor range if you need
     1. Update motion node using current steering angle delta based on the vehicle kinematics equation.
@@ -246,13 +276,20 @@ std::vector<Node> MotionPlanner::RolloutMotion(Node startNode,
 
   // Loop for rollout
   while (progress < maxProgress) {
+    double dt = this->TIME_RESOL;
+    double dx = this->MOTION_VEL * cos(currMotionNode.yaw) * dt;
+    double dy = this->MOTION_VEL * sin(currMotionNode.yaw) * dt;
+    double d_omega = currMotionNode.delta;
+
     // x_t+1   := x_t + x_dot * dt
     // y_t+1   := y_t + y_dot * dt
     // yaw_t+1 := yaw_t + yaw_dot * dt
-    currMotionNode.x += 0.0;
-    currMotionNode.y += 0.0;
-    currMotionNode.yaw += 0.0;
+    currMotionNode.x += dx;
+    currMotionNode.y += dy;
+    currMotionNode.yaw += d_omega * dt;
 
+    // ROS_INFO("Current Motion Node: Progress = %.2f, x=%.2f, y=%.2f, yaw=%.2f, delta=%.2f", progress, currMotionNode.x, currMotionNode.y, currMotionNode.yaw, currMotionNode.delta);
+    
     // Calculate minimum distance toward goal
     if (this->bGetLocalNode) {
       double distGoal = sqrt((currMotionNode.x-truncLocalNode.x)*(currMotionNode.x-truncLocalNode.x) +
@@ -273,32 +310,43 @@ std::vector<Node> MotionPlanner::RolloutMotion(Node startNode,
     //! 2. collision checking
     // - local to map coordinate transform
     Node collisionPointNode(currMotionNode.x, currMotionNode.y, 0, currMotionNode.yaw, currMotionNode.delta, 0, 0, 0, -1, false);
-    Node collisionPointNodeMap = LocalToPlannerCorrdinate(collisionPointNode);
+    Node collisionPointNodeMap = LocalToPlannerCordinate(collisionPointNode);
+    // ROS_INFO("MASUK 50");
     if (CheckCollision(collisionPointNodeMap, localMap)) {
+      // ROS_INFO("MASUK 100")/;
       // - do some process when collision occurs.
       // - you can save collision information & calculate collision cost here.
       // - you can break and return current motion primitive or keep generate rollout.
 
+      // Check if the primitive has any valid nodes saved before the collision point
+      if (!motionPrimitive.empty()) {
+          // ROS_INFO("MASUK 200");
+          // 1. Set the collision flag on the last *valid* node
+          motionPrimitive.back().collision = true;
+          
+          // 2. Assign a massive collision cost 
+          motionPrimitive.back().cost_colli = 999999; 
+      }
+
+        return motionPrimitive;
+    }
+    currMotionNode.cost_colli = 0.0;
+    currMotionNode.collision = false;
+
+
+    //! 3. range checking
+    // double LOS_DIST = std::sqrt(currMotionNode.x * currMotionNode.x + currMotionNode.y * currMotionNode.y);
+    // double LOS_YAW = std::atan2(currMotionNode.y, currMotionNode.x);
+
+    double LOS_DIST = std::sqrt(currMotionNode.x * currMotionNode.x + currMotionNode.y * currMotionNode.y);
+    double LOS_YAW = std::atan2(currMotionNode.y, currMotionNode.x);
+
+    if (LOS_DIST > this->MAX_SENSOR_RANGE || std::abs(LOS_YAW) > this->FOV * 0.5) {
       return motionPrimitive;
     }
 
-    //! 3. range checking
-    // - if you want to filter out motion points out of the sensor range, calculate the Line-Of-Sight (LOS) distance & yaw angle of the node
-    // - LOS distance := sqrt(x^2 + y^2)
-    // - LOS yaw := atan2(y, x)
-    // - if LOS distance > MAX_SENSOR_RANGE or abs(LOS_yaw) > FOV*0.5 <-- outside of sensor range 
-    // - if LOS distance <= MAX_SENSOR_RANGE and abs(LOS_yaw) <= FOV*0.5 <-- inside of sensor range
-    // - use params in header file (MAX_SENSOR_RANGE, FOV)
-    double LOS_DIST = 0.0;
-    double LOS_YAW = 0.0;
-    if (LOS_DIST > this->MAX_SENSOR_RANGE || abs(LOS_YAW) > this->FOV*0.5) {
-      // -- do some process when out-of-range occurs.
-      // -- you can break and return current motion primitive or keep generate rollout.
-
-      return motionPrimitive;
-    } 
-
     // append collision-free motion in the current motionPrimitive
+    currMotionNode.idx = motionPrimitive.size();
     motionPrimitive.push_back(currMotionNode);
 
     // update progress of motion
@@ -328,10 +376,35 @@ std::vector<Node> MotionPlanner::SelectMotion(std::vector<std::vector<Node>> mot
   if (motionPrimitives.size() != 0) {
     // Iterate all motion primitive (motionPrimitive) in motionPrimitives
     for (auto& motionPrimitive : motionPrimitives) {
-      //!1. Calculate cost terms
+      if (motionPrimitive.empty()) {
+          continue; 
+      }
+      //! 1. Calculate cost terms
+      const Node& startNode = motionPrimitive.front();
+      const Node& endNode = motionPrimitive.back();
+
+      double cost_goal_dist = endNode.minDistGoal; // Goal distance cost
+      double cost_control = std::abs(startNode.delta); // Steering control cost
+      double cost_collision = endNode.cost_colli; // Collision cost
+      double cost_length_penalty = this->MAX_PROGRESS - (endNode.idx + 1) * this->DIST_RESOL; // Progress cost (the longer the progress, the lower the cost)
+      // ROS_INFO("endNode.idx: %d", endNode.idx);
 
       //! 2. Calculate total cost ex) collision cost, goal distance, goal direction, progress cost, steering cost....
-      double cost_total = 0.0;
+      double cost_total = 
+          (this->W_COST_TRAVERSABILITY * cost_collision) +  // Prioritize safety (highest weight)
+          (this->W_COST_DIRECTION * cost_goal_dist) +      // Drive toward goal
+          (this->W_COST_CONTROL * cost_control) +                           // Keep turns smooth (unit weight)
+          (this->W_COST_LENGTH_PENALTY * cost_length_penalty * 0);       // Penalize incomplete paths (medium weight)
+
+
+          // Store the final cost in the last node for visualization (optional but useful)
+      motionPrimitive.back().cost_total = cost_total;
+
+      ROS_INFO("Candidate Node no %d: target_x=%.2f, target_y=%.2f, delta=%.2f, cost_control=%.2f, cost_colli=%.2f, cost_goal_dist=%.2f, cost_length_penalty=%.2f, cost_total=%.2f", 
+               motionPrimitive.front().idx,
+               endNode.x, endNode.y, startNode.delta, 
+               cost_control, cost_collision, cost_goal_dist, cost_length_penalty,
+               cost_total);
 
       //! 3. Compare & Find minimum cost & minimum cost motion
       if (cost_total < minCost) {
@@ -349,24 +422,35 @@ std::vector<Node> MotionPlanner::SelectMotion(std::vector<std::vector<Node>> mot
 bool MotionPlanner::CheckCollision(Node goalNodePlanner, nav_msgs::OccupancyGrid localMap)
 {
   /*
-    TODO: check collision of the current node
+    check collision of the current node
     - the position x of the node should be in a range of [0, map width]
     - the position y of the node should be in a range of [0, map height]
     - check all map values within the inflation area of the current node
-    e.g.,
-
-    for loop i in range(0, inflation_size)
-      for loop j in range(0, inflation_size)
-        tmp_x := currentNodeMap.x + i - 0.5*inflation_size <- you need to check whether this tmp_x is in [0, map width]
-        tmp_y := currentNodeMap.y + j - 0.5*inflation_size <- you need to check whether this tmp_x is in [0, map height]
-        map_index := "index of the grid at the position (tmp_x, tmp_y)" <-- map_index should be int, not double!
-        map_value = static_cast<int16_t>(localMap.data[map_index])
-        if (map_value > map_value_threshold) OR (map_value < 0)
-          return true
-    return false
-
-    - use params in header file: INFLATION_SIZE, OCCUPANCY_THRES
   */
+
+  for (int i = 0; i < this->INFLATION_SIZE; i++) {
+    for (int j = 0; j < this->INFLATION_SIZE; j++) {
+      // Calculate the map coordinates (in cells) of the point to check
+      // goalNodePlanner.x and y are the center, already in cell indices
+      int tmp_x = (int)goalNodePlanner.x + i - 0.5*this->INFLATION_SIZE; 
+      int tmp_y = (int)goalNodePlanner.y + j - 0.5*this->INFLATION_SIZE;
+
+      if (tmp_x >= 0 && tmp_x < localMap.info.width && tmp_y >= 0 && tmp_y < localMap.info.height) {
+        // Calculate the 1D index for the map.data array (OccupancyGrid is row-major: index = y * width + x)
+        int map_index = tmp_y * localMap.info.width + tmp_x; 
+        
+        // Get the occupancy value
+        int16_t map_value = static_cast<int16_t>(localMap.data[map_index]);
+        
+        // Check for collision: 
+        // If map_value > OCCUPANCY_THRES (confirmed obstacle) 
+        // OR map_value < 0 (unknown space, usually treated as an obstacle)
+        if (map_value > this->OCCUPANCY_THRES || map_value < 0) {
+          return true; // Collision detected
+        }
+      }
+    }
+  }
 
   return false;
   
@@ -467,7 +551,7 @@ geometry_msgs::PoseStamped MotionPlanner::GlobalToLocalCoordinate(geometry_msgs:
   return poseLocal;
 }
 
-Node MotionPlanner::LocalToPlannerCorrdinate(Node nodeLocal)
+Node MotionPlanner::LocalToPlannerCordinate(Node nodeLocal)
 {
   /*
     TODO: Transform from local to occupancy grid map coordinate
@@ -479,11 +563,51 @@ Node MotionPlanner::LocalToPlannerCorrdinate(Node nodeLocal)
   Node nodeMap;
   memcpy(&nodeMap, &nodeLocal, sizeof(struct Node));
   // Transform from local (min x, max x) [m] to map (0, map width) [grid] coordinate
-  nodeMap.x = 0;
+  // nodeMap.x = 0;
+  nodeMap.x = round((nodeLocal.x - this->origin_x) / this->mapResol);
+  
   // Transform from local (min y, max y) [m] to map (0, map height) [grid] coordinate
-  nodeMap.y = 0;
+  // nodeMap.y = 0;
+  nodeMap.y = round((nodeLocal.y - this->origin_y) / this->mapResol);
+
+  // ROS_INFO("LocalToPlannerCordinate : local (%.2f, %.2f) -> map (%.2f, %.2f)", nodeLocal.x, nodeLocal.y, nodeMap.x, nodeMap.y);
 
   return nodeMap;
+}
+
+void MotionPlanner::CallbackGlobalPath(const nav_msgs::Path& msg)
+{
+    // --- 1. HANDLE EMPTY/NEW PATH ---
+    // If the stored path is empty, we must accept the new path immediately.
+    if (this->globalPath.poses.empty()) {
+        goto new_path_received;
+    }
+
+    // --- 2. COMPARE CONTENT ---
+    // Safety check: If sizes are different, the content MUST be different.
+    if (msg.poses.size() != this->globalPath.poses.size()) {
+        goto new_path_received;
+    }
+
+    // Compare the content element by element only if sizes match.
+    // NOTE: std::equal is robust when comparing two ranges of equal size.
+    if (std::equal(msg.poses.begin(), msg.poses.end(), this->globalPath.poses.begin())) {
+        // Paths are identical in size and content. DO NOTHING and exit.
+        // If the path is identical, we should not assign 'this->globalPath = msg;'
+        // as that defeats the purpose of checking for duplicates.
+        return; 
+    }
+
+    // --- 3. PROCESS NEW PATH ---
+    new_path_received:
+    this->globalPath = msg;
+    this->bGetGoal = true;
+    this->bGetGlobalPath = true;
+    
+    // You would typically reset your waypoint tracker here:
+    // this->currentWaypointIndex = 0; 
+
+    ROS_INFO("Received NEW global path with %lu poses. Content has changed.", msg.poses.size());
 }
 
 
@@ -491,6 +615,33 @@ Node MotionPlanner::LocalToPlannerCorrdinate(Node nodeLocal)
 
 void MotionPlanner::PublishData(std::vector<Node> motionMinCost, std::vector<std::vector<Node>> motionPrimitives)
 {
+
+  // Check if a valid motion was selected
+  // if (!motionMinCost.empty()) {
+  //     const Node& finalNode = motionMinCost.back();
+  //     const Node& startNode = motionMinCost.front();
+  //     double actual_progress = (finalNode.idx + 1) * this->DIST_RESOL; 
+
+  //     // =========================================================================
+  //     // DEBUG OUTPUT: Final Selected Motion Cost Breakdown
+  //     // =========================================================================
+  //     ROS_INFO("=================================================");
+  //     ROS_INFO(">>> FINAL SELECTED MOTION <<<");
+  //     ROS_INFO("Delta: %.2f deg | Total Cost: %.2f", 
+  //               startNode.delta * 180.0 / M_PI, finalNode.cost_total);
+  //     ROS_INFO("End Pose: (%.2f, %.2f)m | Length: %.2fm", 
+  //               finalNode.x, finalNode.y, actual_progress);
+  //     ROS_INFO("Cost Breakdown:");
+  //     ROS_INFO("  - Collision Cost:  %.0f (Weighted: %.0f)", 
+  //               finalNode.cost_colli, this->W_COST_TRAVERSABILITY * finalNode.cost_colli);
+  //     ROS_INFO("  - Goal Dist Cost:  %.2f (Weighted: %.2f)", 
+  //               finalNode.minDistGoal, this->W_COST_DIRECTION * finalNode.minDistGoal);
+  //     ROS_INFO("=================================================");
+  //     // =========================================================================
+  // } else {
+  //     ROS_WARN("PublishData called with empty motionMinCost. Robot may stop.");
+  // }
+
   // Publisher
   // - visualize selected motion primitive
   PublishSelectedMotion(motionMinCost);

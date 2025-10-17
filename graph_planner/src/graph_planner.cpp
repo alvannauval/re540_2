@@ -28,7 +28,7 @@ GraphPlanner::GraphPlanner(ros::NodeHandle &nh) : nh_(nh)
 {
     nh_.getParam("/graph_planner_node/csv_path", csv_path);
 
-    pub_global_path = nh_.advertise<nav_msgs::Path>("/graph_planner/path/global_path", 1);
+    pub_global_path = nh_.advertise<nav_msgs::Path>("/path/global_path", 1);
     LoadCSV(csv_path);
 }
 GraphPlanner::~GraphPlanner()
